@@ -26,6 +26,7 @@ mod state;
 
 // Domain modules
 mod websocket;
+mod indexer;
 
 use config::Config;
 use escrow::{timeout_detector, EscrowService, EventListener};
@@ -67,6 +68,15 @@ async fn main() {
         .unwrap_or_else(|_| "Test SDF Network ; September 2015".to_string());
     let contract_id =
         std::env::var("CONTRACT_ID").unwrap_or_else(|_| "STELLOVAULT_CONTRACT_ID".to_string());
+    
+    // Contract IDs for Indexer
+    let collateral_id = std::env::var("COLLATERAL_CONTRACT_ID").unwrap_or_else(|_| contract_id.clone());
+    let escrow_id = std::env::var("ESCROW_CONTRACT_ID").unwrap_or_else(|_| contract_id.clone());
+    let loan_id = std::env::var("LOAN_CONTRACT_ID").unwrap_or_else(|_| contract_id.clone());
+    
+    let soroban_rpc_url = std::env::var("SOROBAN_RPC_URL")
+        .unwrap_or_else(|_| "https://soroban-testnet.stellar.org".to_string());
+
     let webhook_secret = std::env::var("WEBHOOK_SECRET").ok();
 
     // Initialize database connection pool
@@ -109,17 +119,21 @@ async fn main() {
     );
 
     // Start event listener in background
-    let event_listener = EventListener::new(
-        config.horizon_url.clone(),
-        config.contract_id.clone(),
-        escrow_service.clone(),
-        ws_state.clone(),
+    // Start Indexer Service
+    let mut contracts_map = std::collections::HashMap::new();
+    contracts_map.insert("collateral".to_string(), collateral_id);
+    contracts_map.insert("escrow".to_string(), escrow_id);
+    contracts_map.insert("loan".to_string(), loan_id);
+
+    let indexer_service = Arc::new(indexer::IndexerService::new(
+        soroban_rpc_url,
         db_pool.clone(),
-    );
+        contracts_map,
+        ws_state.clone(),
+    ));
+
     tokio::spawn(async move {
-        tracing::info!("Event listener task started");
-        event_listener.start().await;
-        tracing::error!("Event listener task exited unexpectedly");
+        indexer_service.start().await;
     });
 
     // Start timeout detector in background
